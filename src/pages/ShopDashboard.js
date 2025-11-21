@@ -3,51 +3,67 @@ import { useAuth } from '../context/AuthContext';
 import { db, auth } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, orderBy, serverTimestamp, deleteDoc, doc, updateDoc, setDoc } from 'firebase/firestore';
 import { uploadImage } from '../utils/cloudinary';
-import { FaPaperPlane, FaCamera, FaArrowLeft, FaPlus, FaTrash, FaFire, FaBan } from 'react-icons/fa';
+import { FaPaperPlane, FaCamera, FaArrowLeft, FaPlus, FaTrash, FaFire, FaBan, FaHeadset } from 'react-icons/fa';
 
 const ShopDashboard = () => {
   const { userData } = useAuth();
   const [tab, setTab] = useState('orders');
   
-  const [activeChat, setActiveChat] = useState(null);
+  // Navigation States
+  const [activeChat, setActiveChat] = useState(null); // For Student Orders
+  const [showSupport, setShowSupport] = useState(false); // For Admin Chat
+  
+  // Data States
   const [chats, setChats] = useState([]);
   const [messages, setMessages] = useState([]);
-  const [message, setMessage] = useState('');
   const [products, setProducts] = useState([]);
-  const [isAddingProduct, setIsAddingProduct] = useState(false);
+  
+  // Input States
+  const [message, setMessage] = useState('');
   const [newProduct, setNewProduct] = useState({ name: '', price: '', image: null });
   const [uploading, setUploading] = useState(false);
+  const [isAddingProduct, setIsAddingProduct] = useState(false);
   
+  // Support Chat States
   const [supportMessage, setSupportMessage] = useState('');
   const [supportMessages, setSupportMessages] = useState([]);
+
   const scrollRef = useRef();
 
+  // --- HOOKS ---
+
+  // 1. Fetch Support Messages (Run for everyone now, not just blacklisted)
   useEffect(() => {
-    if (!userData?.blacklisted) return;
     const chatId = `support_${auth.currentUser.uid}`;
     const q = query(collection(db, "chats", chatId, "messages"), orderBy("createdAt", "asc"));
     return onSnapshot(q, (snapshot) => {
       setSupportMessages(snapshot.docs.map(doc => doc.data()));
     });
-  }, [userData]);
+  }, []); // Empty dependency array = runs on mount
 
+  // 2. Fetch Orders (Exclude if blacklisted)
   useEffect(() => {
     if (userData?.blacklisted || tab !== 'orders') return;
+    // Filter out support chats from the Orders tab
     const q = query(collection(db, "chats"), where("participants", "array-contains", auth.currentUser.uid), orderBy("lastUpdated", "desc"));
-    return onSnapshot(q, (snapshot) => setChats(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(c => !c.isSupport)));
+    return onSnapshot(q, (snapshot) => {
+        setChats(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(c => !c.isSupport));
+    });
   }, [tab, userData]);
 
-  // FIX: Removed second orderBy. Items will now definitely show.
+  // 3. Fetch Products (Exclude if blacklisted)
   useEffect(() => {
     if (userData?.blacklisted || tab !== 'products') return;
     const q = query(
       collection(db, "products"), 
       where("shopId", "==", auth.currentUser.uid), 
-      orderBy("isFrequent", "desc") 
+      orderBy("isFrequent", "desc"),
+      orderBy("name", "asc")
     );
     return onSnapshot(q, (snapshot) => setProducts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
   }, [tab, userData]);
 
+  // 4. Fetch Active Order Messages
   useEffect(() => {
     if (!activeChat) return;
     const q = query(collection(db, "chats", activeChat.id, "messages"), orderBy("createdAt", "asc"));
@@ -57,9 +73,14 @@ const ShopDashboard = () => {
     });
   }, [activeChat]);
 
+
+  // --- ACTIONS ---
+
   const handleSendSupport = async () => {
     if (!supportMessage.trim()) return;
     const chatId = `support_${auth.currentUser.uid}`;
+    
+    // Ensure Chat Metadata exists with isSupport flag
     await setDoc(doc(db, "chats", chatId), {
       participants: [auth.currentUser.uid],
       isSupport: true,
@@ -67,7 +88,12 @@ const ShopDashboard = () => {
       lastUpdated: serverTimestamp(),
       studentName: userData.displayName || "Shop Owner"
     }, { merge: true });
-    await addDoc(collection(db, "chats", chatId, "messages"), { text: supportMessage, sender: auth.currentUser.uid, createdAt: serverTimestamp() });
+
+    await addDoc(collection(db, "chats", chatId, "messages"), { 
+        text: supportMessage, 
+        sender: auth.currentUser.uid, 
+        createdAt: serverTimestamp() 
+    });
     setSupportMessage('');
   };
 
@@ -96,6 +122,8 @@ const ShopDashboard = () => {
   const toggleFrequent = async (product) => { await updateDoc(doc(db, "products", product.id), { isFrequent: !product.isFrequent }); };
   const handleDeleteProduct = async (id) => { if(window.confirm("Delete?")) await deleteDoc(doc(db, "products", id)); };
 
+
+  // --- VIEW 1: BANNED VIEW (Blocks everything else) ---
   if (userData?.blacklisted) {
     return (
       <div className="min-h-screen flex flex-col bg-red-50">
@@ -124,6 +152,33 @@ const ShopDashboard = () => {
     );
   }
 
+  // --- VIEW 2: ACTIVE SUPPORT CHAT (For normal shops) ---
+  if (showSupport) {
+    return (
+      <div className="flex flex-col h-[calc(100vh-80px)] bg-white absolute top-0 left-0 w-full z-50">
+        <div className="p-4 border-b flex items-center gap-3 bg-gray-800 text-white shadow-sm">
+          <button onClick={() => setShowSupport(false)} className="text-white p-2 hover:bg-gray-700 rounded-full"><FaArrowLeft /></button>
+          <h2 className="font-bold text-lg">Admin Support</h2>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
+          {supportMessages.length === 0 && <p className="text-center text-gray-400 mt-10">Need help? Message the Admin.</p>}
+          {supportMessages.map((msg, idx) => (
+            <div key={idx} ref={scrollRef} className={`flex ${msg.sender === auth.currentUser.uid ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[75%] p-3 rounded-2xl text-sm ${msg.sender === auth.currentUser.uid ? 'bg-gray-800 text-white rounded-tr-none' : 'bg-white border shadow-sm rounded-tl-none'}`}>
+                {msg.text}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="p-3 border-t bg-white flex gap-2">
+          <input type="text" value={supportMessage} onChange={(e) => setSupportMessage(e.target.value)} placeholder="Type your issue..." className="flex-1 bg-gray-100 rounded-full px-4 py-3 outline-none" />
+          <button onClick={handleSendSupport} className="p-3 bg-gray-800 text-white rounded-full"><FaPaperPlane /></button>
+        </div>
+      </div>
+    );
+  }
+
+  // --- VIEW 3: ACTIVE ORDER CHAT ---
   if (activeChat) {
     return (
       <div className="flex flex-col h-[calc(100vh-80px)] bg-white absolute top-0 left-0 w-full z-50">
@@ -150,15 +205,26 @@ const ShopDashboard = () => {
     );
   }
 
+  // --- VIEW 4: MAIN DASHBOARD (Tabs) ---
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="bg-white p-4 shadow-sm flex justify-between items-center sticky top-0 z-10">
-        <h1 className="text-xl font-bold text-brand-600">Shop Dashboard</h1>
-        <div className="flex bg-gray-100 rounded-lg p-1">
-          <button onClick={() => setTab('orders')} className={`px-4 py-2 rounded-md text-sm font-medium ${tab === 'orders' ? 'bg-white text-brand-600 shadow-sm' : 'text-gray-500'}`}>Orders</button>
-          <button onClick={() => setTab('products')} className={`px-4 py-2 rounded-md text-sm font-medium ${tab === 'products' ? 'bg-white text-brand-600 shadow-sm' : 'text-gray-500'}`}>Products</button>
+        <div className="flex items-center gap-2">
+             <h1 className="text-xl font-bold text-brand-600">Shop Dashboard</h1>
+        </div>
+        
+        {/* NEW: Help Button & Tab Switcher */}
+        <div className="flex items-center gap-2">
+            <button onClick={() => setShowSupport(true)} className="p-2 text-gray-500 hover:text-brand-600 hover:bg-brand-50 rounded-full transition-colors" title="Contact Support">
+                <FaHeadset size={20} />
+            </button>
+            <div className="flex bg-gray-100 rounded-lg p-1">
+            <button onClick={() => setTab('orders')} className={`px-4 py-2 rounded-md text-sm font-medium ${tab === 'orders' ? 'bg-white text-brand-600 shadow-sm' : 'text-gray-500'}`}>Orders</button>
+            <button onClick={() => setTab('products')} className={`px-4 py-2 rounded-md text-sm font-medium ${tab === 'products' ? 'bg-white text-brand-600 shadow-sm' : 'text-gray-500'}`}>Products</button>
+            </div>
         </div>
       </div>
+
       {tab === 'orders' && (
         <div className="p-4 space-y-3">
           {chats.length === 0 && <p className="text-center text-gray-400 mt-10">No active orders.</p>}
@@ -170,6 +236,7 @@ const ShopDashboard = () => {
           ))}
         </div>
       )}
+
       {tab === 'products' && (
         <div className="p-4 pb-24">
           <div className="grid grid-cols-2 gap-4">
@@ -188,6 +255,7 @@ const ShopDashboard = () => {
           </div>
         </div>
       )}
+      
       {isAddingProduct && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
