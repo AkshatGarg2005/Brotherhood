@@ -18,27 +18,39 @@ const StudentDashboard = () => {
   const [helpMessages, setHelpMessages] = useState([]);
   const scrollRef = useRef();
 
+  // Define Categories exactly as they appear in Onboarding
+  const CATEGORIES = ['All', 'General Store', 'Stationery', 'Food & Snacks', 'Printing/Xerox'];
+
+  // 1. Fetch Shops & Global Items
   useEffect(() => {
+    // Fetch Shops
     const unsubShops = onSnapshot(query(collection(db, "users"), where("role", "==", "shop")), (snapshot) => {
       setShops(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(s => !s.blacklisted));
     });
+
+    // Fetch Global Featured
     const unsubFeatured = onSnapshot(query(collection(db, "global_featured"), orderBy("createdAt", "desc")), (snapshot) => {
       setGlobalFeatured(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
+
     return () => { unsubShops(); unsubFeatured(); };
   }, []);
 
-  // FIX: Removed second orderBy. Items will now definitely show.
+  // 2. Fetch Products (Restored Double Sorting since you have the Index now)
   useEffect(() => {
     if (!activeShop || view !== 'storefront') return;
+    
     const q = query(
       collection(db, "products"), 
       where("shopId", "==", activeShop.id), 
-      orderBy("isFrequent", "desc")
+      orderBy("isFrequent", "desc"), 
+      orderBy("name", "asc")
     );
+    
     return onSnapshot(q, (snap) => setShopProducts(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
   }, [activeShop, view]);
 
+  // 3. Fetch Chat Messages
   useEffect(() => {
     if (!activeShop || view !== 'chat') return;
     const chatId = [auth.currentUser.uid, activeShop.id].sort().join("_");
@@ -46,6 +58,7 @@ const StudentDashboard = () => {
     return onSnapshot(q, (snap) => { setMessages(snap.docs.map(d => d.data())); scrollRef.current?.scrollIntoView({ behavior: "smooth" }); });
   }, [activeShop, view]);
 
+  // 4. Fetch Help Messages
   useEffect(() => {
     if (view !== 'help') return;
     const chatId = `support_${auth.currentUser.uid}`;
@@ -53,6 +66,7 @@ const StudentDashboard = () => {
     return onSnapshot(q, (snap) => { setHelpMessages(snap.docs.map(d => d.data())); scrollRef.current?.scrollIntoView({ behavior: "smooth" }); });
   }, [view]);
 
+  // --- ACTIONS ---
   const openStorefront = (shop) => { setActiveShop(shop); setView('storefront'); };
   const openChat = (initialMsg = '') => { if(initialMsg) setMessage(initialMsg); setView('chat'); };
   const handleGlobalItemClick = (item) => { openStorefront({ id: item.shopId, displayName: item.shopName, category: item.shopCategory }); };
@@ -81,18 +95,30 @@ const StudentDashboard = () => {
     setHelpMessage('');
   };
 
+  // --- VIEW 1: LIST ---
   if (view === 'list') {
     return (
       <div className="bg-gray-50 min-h-screen pb-24 relative">
         <button onClick={() => setView('help')} className="fixed bottom-20 right-4 bg-gray-800 text-white p-3 rounded-full shadow-lg z-40 flex items-center gap-2"><FaHeadset /> <span className="text-xs font-bold">Help</span></button>
+        
         <div className="bg-white p-4 sticky top-0 z-10 shadow-sm mb-4">
           <h1 className="text-xl font-bold text-brand-600">Brotherhood.</h1>
+          
+          {/* CATEGORY FILTER */}
           <div className="flex gap-2 mt-3 overflow-x-auto no-scrollbar">
-            {['All', 'Stationery', 'General Store', 'Food & Snacks'].map(cat => (
-              <button key={cat} onClick={() => setFilter(cat)} className={`px-4 py-1.5 rounded-full text-sm whitespace-nowrap transition-all ${filter === cat ? 'bg-brand-500 text-white' : 'bg-gray-100 text-gray-600'}`}>{cat}</button>
+            {CATEGORIES.map(cat => (
+              <button 
+                key={cat} 
+                onClick={() => setFilter(cat)} 
+                className={`px-4 py-1.5 rounded-full text-sm whitespace-nowrap transition-all ${filter === cat ? 'bg-brand-500 text-white' : 'bg-gray-100 text-gray-600'}`}
+              >
+                {cat}
+              </button>
             ))}
           </div>
         </div>
+
+        {/* GLOBAL ITEMS */}
         {globalFeatured.length > 0 && (
           <div className="px-4 mb-6">
             <h3 className="text-sm font-bold text-gray-500 mb-2 uppercase tracking-wide">Frequently Ordered</h3>
@@ -107,8 +133,12 @@ const StudentDashboard = () => {
             </div>
           </div>
         )}
+
+        {/* SHOPS LIST (Filtered) */}
         <div className="px-4 grid gap-4">
           <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wide">Shops</h3>
+          
+          {/* Logic: If filter is 'All', show everything. Else check exact category match. */}
           {shops.filter(s => filter === 'All' || s.category === filter).map(shop => (
             <div key={shop.id} onClick={() => openStorefront(shop)} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4 cursor-pointer active:scale-[0.98] transition-transform relative overflow-hidden">
               {shop.verified && <div className="absolute top-0 right-0 bg-green-500 text-white px-2 py-0.5 text-[10px] font-bold rounded-bl-lg z-10 flex items-center gap-1"><FaCheckCircle size={10}/> VERIFIED</div>}
@@ -119,11 +149,17 @@ const StudentDashboard = () => {
               </div>
             </div>
           ))}
+          
+          {/* Empty State if no shops match filter */}
+          {shops.filter(s => filter === 'All' || s.category === filter).length === 0 && (
+             <div className="text-center text-gray-400 py-10">No shops found in {filter}</div>
+          )}
         </div>
       </div>
     );
   }
 
+  // --- VIEW 2: HELP ---
   if (view === 'help') {
     return (
       <div className="flex flex-col h-[calc(100vh-80px)] bg-white absolute top-0 left-0 w-full z-50">
@@ -147,6 +183,7 @@ const StudentDashboard = () => {
     );
   }
 
+  // --- VIEW 3: STOREFRONT ---
   if (view === 'storefront') {
     return (
       <div className="min-h-screen bg-gray-50 pb-24">
@@ -159,6 +196,7 @@ const StudentDashboard = () => {
           </div>
         </div>
         <div className="p-4 grid grid-cols-2 gap-4">
+           {shopProducts.length === 0 && <div className="col-span-2 text-center text-gray-400">No products available.</div>}
            {shopProducts.map(product => (
              <div key={product.id} onClick={() => openChat(`Interested in ${product.name}`)} className={`bg-white rounded-xl shadow-sm overflow-hidden ${product.isFrequent ? 'border-2 border-orange-100' : ''}`}>
                <div className="h-32 bg-gray-100 relative">
@@ -176,6 +214,7 @@ const StudentDashboard = () => {
     )
   }
   
+  // --- VIEW 4: CHAT ---
   return (
     <div className="flex flex-col h-[calc(100vh-80px)] bg-white absolute top-0 left-0 w-full z-50">
       <div className="p-4 border-b flex items-center gap-3 bg-white shadow-sm">
