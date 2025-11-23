@@ -2,61 +2,39 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db, auth } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, orderBy, serverTimestamp, deleteDoc, doc, updateDoc, setDoc } from 'firebase/firestore';
-import { uploadImage } from '../utils/cloudinary';
-import { FaPaperPlane, FaCamera, FaArrowLeft, FaPlus, FaTrash, FaFire, FaBan, FaHeadset, FaShoppingBag, FaPhone, FaMapMarkerAlt } from 'react-icons/fa';
+import { uploadFile } from '../utils/cloudinary';
+import { FaPaperPlane, FaCamera, FaArrowLeft, FaPlus, FaTrash, FaFire, FaBan, FaHeadset, FaShoppingBag, FaPhone, FaMapMarkerAlt, FaPaperclip, FaFileAlt, FaExternalLinkAlt } from 'react-icons/fa';
 
 const ShopDashboard = () => {
   const { userData } = useAuth();
   const [tab, setTab] = useState('orders');
-  
   const [activeChat, setActiveChat] = useState(null);
   const [showSupport, setShowSupport] = useState(false);
-  
   const [chats, setChats] = useState([]);
   const [directOrders, setDirectOrders] = useState([]);
   const [messages, setMessages] = useState([]);
   const [products, setProducts] = useState([]);
-  
   const [message, setMessage] = useState('');
   const [newProduct, setNewProduct] = useState({ name: '', price: '', image: null });
   const [uploading, setUploading] = useState(false);
   const [isAddingProduct, setIsAddingProduct] = useState(false);
-  
   const [supportMessage, setSupportMessage] = useState('');
   const [supportMessages, setSupportMessages] = useState([]);
-
   const scrollRef = useRef();
 
-  const STATUS_RANK = {
-    'pending': 1,
-    'confirmed': 2,
-    'completed': 3,
-    'cancelled': 0
-  };
+  // ... (Logic functions: handleStatusChange, etc. - same as before) ...
+  const STATUS_RANK = { 'pending': 1, 'confirmed': 2, 'completed': 3, 'cancelled': 0 };
 
   const handleStatusChange = async (order, newStatus) => {
-    if (order.status === 'cancelled') {
-      return alert("This order is cancelled. You cannot change its status.");
-    }
+    if (order.status === 'cancelled') return alert("This order is cancelled. You cannot change its status.");
     if (newStatus === 'cancelled') {
-      if (window.confirm("Are you sure you want to CANCEL this order?")) {
-        await updateDoc(doc(db, "orders", order.id), { status: newStatus });
-      }
+      if (window.confirm("Are you sure you want to CANCEL this order?")) await updateDoc(doc(db, "orders", order.id), { status: newStatus });
       return;
     }
     const currentRank = STATUS_RANK[order.status] || 0;
     const newRank = STATUS_RANK[newStatus] || 0;
-
-    if (newRank <= currentRank) {
-      return alert("You can only move the order status forward (e.g. Pending -> Confirmed).");
-    }
-
-    try {
-      await updateDoc(doc(db, "orders", order.id), { status: newStatus });
-    } catch (error) {
-      console.error("Error updating status:", error);
-      alert("Failed to update status.");
-    }
+    if (newRank <= currentRank) return alert("You can only move the order status forward.");
+    try { await updateDoc(doc(db, "orders", order.id), { status: newStatus }); } catch (error) { console.error("Error updating status:", error); alert("Failed to update status."); }
   };
 
   useEffect(() => {
@@ -89,36 +67,66 @@ const ShopDashboard = () => {
     return onSnapshot(q, (snapshot) => { setMessages(snapshot.docs.map(doc => doc.data())); scrollRef.current?.scrollIntoView({ behavior: "smooth" }); });
   }, [activeChat]);
 
-  const handleSendSupport = async () => {
-    if (!supportMessage.trim()) return;
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fileData = await uploadFile(file); 
+    if (fileData) {
+        if(showSupport) handleSendSupport(fileData);
+        else if(activeChat) handleSend(fileData);
+    }
+  };
+
+  const handleSendSupport = async (attachment = null) => {
+    const validAttachment = attachment && attachment.url ? attachment : null;
+    if (!supportMessage.trim() && !validAttachment) return;
     const chatId = `support_${auth.currentUser.uid}`;
-    await setDoc(doc(db, "chats", chatId), { participants: [auth.currentUser.uid], isSupport: true, lastMessage: supportMessage, lastUpdated: serverTimestamp(), studentName: userData.displayName || "Shop Owner" }, { merge: true });
-    await addDoc(collection(db, "chats", chatId, "messages"), { text: supportMessage, sender: auth.currentUser.uid, createdAt: serverTimestamp() });
+    await setDoc(doc(db, "chats", chatId), { participants: [auth.currentUser.uid], isSupport: true, lastMessage: supportMessage || "Attachment", lastUpdated: serverTimestamp(), studentName: userData.displayName || "Shop Owner" }, { merge: true });
+    await addDoc(collection(db, "chats", chatId, "messages"), { text: supportMessage, attachment: validAttachment, image: validAttachment?.type?.startsWith('image') ? validAttachment.url : null, sender: auth.currentUser.uid, createdAt: serverTimestamp() });
     setSupportMessage('');
   };
 
-  const handleSend = async (imgUrl = null) => {
-    const validImg = (typeof imgUrl === 'string') ? imgUrl : null;
-    if (!message.trim() && !validImg) return;
-    await addDoc(collection(db, "chats", activeChat.id, "messages"), { text: message, image: validImg, sender: auth.currentUser.uid, createdAt: serverTimestamp() });
+  const handleSend = async (attachment = null) => {
+    const validAttachment = attachment && attachment.url ? attachment : null;
+    if (!message.trim() && !validAttachment) return;
+    await addDoc(collection(db, "chats", activeChat.id, "messages"), { text: message, attachment: validAttachment, image: validAttachment?.type?.startsWith('image') ? validAttachment.url : null, sender: auth.currentUser.uid, createdAt: serverTimestamp() });
     setMessage('');
-  };
-
-  const handleChatImageUpload = async (e) => {
-     const file = e.target.files[0]; if(file) { const url = await uploadImage(file); if(url) handleSend(url); }
   };
 
   const handleAddProduct = async () => {
     if (!newProduct.name || !newProduct.price || !newProduct.image) return alert("Fill all fields");
     setUploading(true);
-    const imageUrl = await uploadImage(newProduct.image);
-    await addDoc(collection(db, "products"), { shopId: auth.currentUser.uid, name: newProduct.name, price: newProduct.price, image: imageUrl, isFrequent: false, rating: 0, ratingCount: 0, createdAt: serverTimestamp() });
+    const fileData = await uploadFile(newProduct.image); 
+    await addDoc(collection(db, "products"), { shopId: auth.currentUser.uid, name: newProduct.name, price: newProduct.price, image: fileData.url, isFrequent: false, rating: 0, ratingCount: 0, createdAt: serverTimestamp() });
     setNewProduct({ name: '', price: '', image: null }); setIsAddingProduct(false); setUploading(false);
   };
 
   const toggleFrequent = async (product) => { await updateDoc(doc(db, "products", product.id), { isFrequent: !product.isFrequent }); };
   const handleDeleteProduct = async (id) => { if(window.confirm("Delete?")) await deleteDoc(doc(db, "products", id)); };
 
+  // FIXED: Direct link
+  const renderMessageContent = (msg) => {
+    return (
+      <>
+        {msg.image && !msg.attachment && <img src={msg.image} alt="img" className="rounded-lg mb-2 max-h-40 w-full object-cover"/>}
+        {msg.attachment && (
+          msg.attachment.type?.startsWith('image') ? (
+            <img src={msg.attachment.url} alt="img" className="rounded-lg mb-2 max-h-40 w-full object-cover"/>
+          ) : (
+            <a href={msg.attachment.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 bg-black/5 p-3 rounded-lg mb-2 hover:bg-black/10 transition-colors no-underline">
+              <div className="bg-white p-2 rounded-full text-brand-600"><FaFileAlt /></div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-bold text-gray-800 truncate">{msg.attachment.name}</p>
+                <p className="text-[10px] text-gray-500 uppercase">Tap to open</p>
+              </div>
+              <FaExternalLinkAlt className="text-gray-400" size={12}/>
+            </a>
+          )
+        )}
+        <p>{msg.text}</p>
+      </>
+    );
+  };
 
   // --- VIEW: BANNED ---
   if (userData?.blacklisted) {
@@ -133,13 +141,15 @@ const ShopDashboard = () => {
           <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
             {supportMessages.map((msg, idx) => (
               <div key={idx} className={`flex ${msg.sender === auth.currentUser.uid ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[80%] p-3 rounded-xl text-sm ${msg.sender === auth.currentUser.uid ? 'bg-red-500 text-white' : 'bg-gray-200 text-gray-800'}`}>{msg.text}</div>
+                <div className={`max-w-[80%] p-3 rounded-xl text-sm ${msg.sender === auth.currentUser.uid ? 'bg-red-500 text-white' : 'bg-gray-200 text-gray-800'}`}>
+                    {renderMessageContent(msg)}
+                </div>
               </div>
             ))}
           </div>
           <div className="p-3 border-t flex gap-2">
             <input type="text" value={supportMessage} onChange={e => setSupportMessage(e.target.value)} placeholder="Message..." className="flex-1 bg-gray-100 rounded-full px-4 py-2 outline-none"/>
-            <button onClick={handleSendSupport} className="bg-red-500 text-white p-3 rounded-full"><FaPaperPlane/></button>
+            <button onClick={() => handleSendSupport()} className="bg-red-500 text-white p-3 rounded-full"><FaPaperPlane/></button>
           </div>
         </div>
       </div>
@@ -159,13 +169,19 @@ const ShopDashboard = () => {
         <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
           {supportMessages.map((msg, idx) => (
             <div key={idx} className={`flex ${msg.sender === auth.currentUser.uid ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[75%] p-3 rounded-2xl text-sm ${msg.sender === auth.currentUser.uid ? 'bg-gray-800 text-white' : 'bg-white border shadow-sm'}`}>{msg.text}</div>
+              <div className={`max-w-[75%] p-3 rounded-2xl text-sm ${msg.sender === auth.currentUser.uid ? 'bg-gray-800 text-white' : 'bg-white border shadow-sm'}`}>
+                  {renderMessageContent(msg)}
+              </div>
             </div>
           ))}
         </div>
-        <div className="flex-none p-3 border-t bg-white flex gap-2 pb-safe">
+        <div className="flex-none p-3 border-t bg-white flex items-center gap-2 pb-safe">
+          <label className="p-3 text-gray-400 bg-gray-50 rounded-full cursor-pointer hover:bg-gray-100 transition-colors">
+              <FaPaperclip size={20} />
+              <input type="file" className="hidden" onChange={handleFileUpload} />
+          </label>
           <input type="text" value={supportMessage} onChange={(e) => setSupportMessage(e.target.value)} placeholder="Type your issue..." className="flex-1 bg-gray-100 rounded-full px-4 py-3 outline-none" />
-          <button onClick={handleSendSupport} className="p-3 bg-gray-800 text-white rounded-full"><FaPaperPlane /></button>
+          <button onClick={() => handleSendSupport()} className="p-3 bg-gray-800 text-white rounded-full"><FaPaperPlane /></button>
         </div>
       </div>
     );
@@ -185,14 +201,13 @@ const ShopDashboard = () => {
           {messages.map((msg, idx) => (
             <div key={idx} ref={scrollRef} className={`flex ${msg.sender === auth.currentUser.uid ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[75%] p-3 rounded-2xl ${msg.sender === auth.currentUser.uid ? 'bg-brand-500 text-white' : 'bg-white text-gray-800 shadow-sm border'}`}>
-                {msg.image && <img src={msg.image} alt="attachment" className="rounded-lg mb-2" />}
-                <p className="text-sm">{msg.text}</p>
+                  {renderMessageContent(msg)}
               </div>
             </div>
           ))}
         </div>
         <div className="flex-none p-3 border-t bg-white flex items-center gap-3 pb-safe">
-          <label className="p-2 text-gray-400"><FaCamera size={22} /><input type="file" className="hidden" onChange={handleChatImageUpload} /></label>
+          <label className="p-2 text-gray-400 cursor-pointer"><FaPaperclip size={20} /><input type="file" className="hidden" onChange={handleFileUpload} /></label>
           <input type="text" value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Reply..." className="flex-1 bg-gray-100 rounded-full px-4 py-3 focus:outline-none" />
           <button onClick={() => handleSend()} className="p-3 bg-brand-500 text-white rounded-full shadow-lg"><FaPaperPlane /></button>
         </div>
@@ -200,6 +215,7 @@ const ShopDashboard = () => {
     );
   }
 
+  // ... (Rest of dashboard UI) ...
   // --- MAIN DASHBOARD ---
   return (
     <div className="min-h-screen bg-gray-50">

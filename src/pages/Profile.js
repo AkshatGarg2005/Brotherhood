@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { auth, db } from '../firebase';
 import { updateProfile, signOut } from 'firebase/auth';
 import { doc, updateDoc, getDoc } from 'firebase/firestore';
-import { uploadImage } from '../utils/cloudinary';
+import { uploadFile } from '../utils/cloudinary'; // FIXED IMPORT
 import { useNavigate } from 'react-router-dom';
 import { FaCamera, FaSignOutAlt, FaSave, FaMapMarkerAlt, FaPhone } from 'react-icons/fa';
 
@@ -15,7 +15,6 @@ const Profile = () => {
   const [role, setRole] = useState('');
   const [photoURL, setPhotoURL] = useState(user?.photoURL || '');
   
-  // New Fields
   const [address, setAddress] = useState('');
   const [phone, setPhone] = useState('');
   
@@ -64,8 +63,11 @@ const Profile = () => {
     const file = e.target.files[0];
     if (file) {
       setLoading(true);
-      const url = await uploadImage(file);
-      if (url) setPhotoURL(url);
+      // FIXED: Use uploadFile and extract .url
+      const fileData = await uploadFile(file);
+      if (fileData && fileData.url) {
+          setPhotoURL(fileData.url);
+      }
       setLoading(false);
     }
   };

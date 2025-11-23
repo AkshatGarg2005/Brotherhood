@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db, auth } from '../firebase';
 import { collection, query, where, onSnapshot, addDoc, orderBy, serverTimestamp, setDoc, doc, getDoc, updateDoc } from 'firebase/firestore';
-import { uploadImage } from '../utils/cloudinary';
-import { FaPaperPlane, FaCamera, FaArrowLeft, FaArrowRight, FaCheckCircle, FaFire, FaHeadset, FaStore, FaShoppingBag, FaMinus, FaPlus, FaStar, FaTimes } from 'react-icons/fa';
+import { uploadFile } from '../utils/cloudinary';
+import { FaPaperPlane, FaCamera, FaArrowLeft, FaArrowRight, FaCheckCircle, FaFire, FaHeadset, FaStore, FaShoppingBag, FaMinus, FaPlus, FaStar, FaTimes, FaPaperclip, FaFileAlt, FaExternalLinkAlt } from 'react-icons/fa';
 import { useCart } from '../context/CartContext';
 
 const StudentDashboard = () => {
@@ -30,6 +30,7 @@ const StudentDashboard = () => {
 
   const CATEGORIES = ['All', 'General Store', 'Stationery', 'Food & Snacks', 'Printing/Xerox'];
 
+  // --- DATA FETCHING ---
   useEffect(() => {
     const unsubShops = onSnapshot(query(collection(db, "users"), where("role", "==", "shop")), (snap) => {
       setShops(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(s => !s.blacklisted));
@@ -74,30 +75,39 @@ const StudentDashboard = () => {
     return onSnapshot(q, (snap) => { setHelpMessages(snap.docs.map(d => d.data())); scrollRef.current?.scrollIntoView({ behavior: "smooth" }); });
   }, [view]);
 
+  // --- ACTIONS ---
   const openStorefront = (shop) => { setActiveShop(shop); setView('storefront'); };
   const openChat = (initialMsg = '') => { if(initialMsg) setMessage(initialMsg); setView('chat'); };
   const handleGlobalItemClick = (item) => { openStorefront({ id: item.shopId, displayName: item.shopName, category: item.shopCategory }); };
 
-  const handleSend = async (imgUrl = null) => {
-    // Ensure imgUrl is either a string or null, NOT an event object
-    const validImg = (typeof imgUrl === 'string') ? imgUrl : null;
-    
-    if (!message.trim() && !validImg) return;
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fileData = await uploadFile(file); 
+    if (fileData) {
+        if(view === 'help') handleSendHelp(fileData);
+        else handleSend(fileData);
+    }
+  };
+
+  const handleSend = async (attachment = null) => {
+    const validAttachment = attachment && attachment.url ? attachment : null;
+    if (!message.trim() && !validAttachment) return;
     
     const chatId = [auth.currentUser.uid, activeShop.id].sort().join("_");
     await setDoc(doc(db, "chats", chatId), {
-      participants: [auth.currentUser.uid, activeShop.id], lastMessage: message || "Image", lastUpdated: serverTimestamp(), studentName: auth.currentUser.displayName
+      participants: [auth.currentUser.uid, activeShop.id], lastMessage: message || "Attachment", lastUpdated: serverTimestamp(), studentName: auth.currentUser.displayName
     }, { merge: true });
-    
-    await addDoc(collection(db, "chats", chatId, "messages"), { text: message, image: validImg, sender: auth.currentUser.uid, createdAt: serverTimestamp() });
+    await addDoc(collection(db, "chats", chatId, "messages"), { text: message, attachment: validAttachment, image: validAttachment?.type?.startsWith('image') ? validAttachment.url : null, sender: auth.currentUser.uid, createdAt: serverTimestamp() });
     setMessage('');
   };
 
-  const handleSendHelp = async () => {
-    if (!helpMessage.trim()) return;
+  const handleSendHelp = async (attachment = null) => {
+    const validAttachment = attachment && attachment.url ? attachment : null;
+    if (!helpMessage.trim() && !validAttachment) return;
     const chatId = `support_${auth.currentUser.uid}`;
-    await setDoc(doc(db, "chats", chatId), { participants: [auth.currentUser.uid], isSupport: true, lastMessage: helpMessage, lastUpdated: serverTimestamp(), studentName: auth.currentUser.displayName || "Student" }, { merge: true });
-    await addDoc(collection(db, "chats", chatId, "messages"), { text: helpMessage, sender: auth.currentUser.uid, createdAt: serverTimestamp() });
+    await setDoc(doc(db, "chats", chatId), { participants: [auth.currentUser.uid], isSupport: true, lastMessage: helpMessage || "Attachment", lastUpdated: serverTimestamp(), studentName: auth.currentUser.displayName || "Student" }, { merge: true });
+    await addDoc(collection(db, "chats", chatId, "messages"), { text: helpMessage, attachment: validAttachment, image: validAttachment?.type?.startsWith('image') ? validAttachment.url : null, sender: auth.currentUser.uid, createdAt: serverTimestamp() });
     setHelpMessage('');
   };
 
@@ -131,6 +141,35 @@ const StudentDashboard = () => {
         await updateDoc(productRef, { rating: newAvg, ratingCount: newCount });
     }
     setRatingModal(null); alert("Thanks for your rating!");
+  };
+
+  // FIXED: No more URL manipulation. Direct link.
+  const renderMessageContent = (msg) => {
+    return (
+      <>
+        {msg.image && !msg.attachment && <img src={msg.image} alt="img" className="rounded-lg mb-2 max-h-40 w-full object-cover"/>}
+        {msg.attachment && (
+          msg.attachment.type?.startsWith('image') ? (
+            <img src={msg.attachment.url} alt="img" className="rounded-lg mb-2 max-h-40 w-full object-cover"/>
+          ) : (
+            <a 
+                href={msg.attachment.url} 
+                target="_blank" 
+                rel="noopener noreferrer" 
+                className="flex items-center gap-3 bg-black/5 p-3 rounded-lg mb-2 hover:bg-black/10 transition-colors no-underline"
+            >
+              <div className="bg-white p-2 rounded-full text-brand-600"><FaFileAlt /></div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-bold text-gray-800 truncate">{msg.attachment.name}</p>
+                <p className="text-[10px] text-gray-500 uppercase">Tap to open</p>
+              </div>
+              <FaExternalLinkAlt className="text-gray-400" size={12}/>
+            </a>
+          )
+        )}
+        <p>{msg.text}</p>
+      </>
+    );
   };
 
   // --- VIEW: CART ---
@@ -370,9 +409,18 @@ const StudentDashboard = () => {
     const chatInput = isHelp ? helpMessage : message;
     const setChatInput = isHelp ? setHelpMessage : setMessage;
     const sendFunc = isHelp ? handleSendHelp : handleSend;
+    const fileUploadHandler = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        uploadFile(file).then(fileData => {
+            if (fileData) {
+                if(isHelp) handleSendHelp(fileData);
+                else handleSend(fileData);
+            }
+        });
+    };
 
     return (
-      // FIXED: Chat covers bottom nav with z-[60] and h-[100dvh]
       <div className="fixed inset-0 z-[60] bg-white flex flex-col h-[100dvh]">
         <div className="flex-none">
           <div className="bg-white/90 backdrop-blur-md border-b border-gray-100 px-4 py-3 flex items-center justify-between shadow-[0_2px_15px_-3px_rgba(0,0,0,0.02)]">
@@ -389,23 +437,18 @@ const StudentDashboard = () => {
             return (
               <div key={idx} ref={scrollRef} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-[75%] px-4 py-3 text-sm shadow-sm ${isMe ? 'bg-brand-600 text-white rounded-2xl rounded-tr-sm' : 'bg-white text-gray-800 border border-gray-100 rounded-2xl rounded-tl-sm'}`}>
-                  {msg.image && <img src={msg.image} alt="img" className="rounded-lg mb-2 max-h-40 w-full object-cover"/>}
-                  <p>{msg.text}</p>
+                  {renderMessageContent(msg)}
                 </div>
               </div>
             )
           })}
         </div>
         <div className="flex-none p-3 bg-white border-t border-gray-100 flex items-center gap-2 pb-safe">
-           {!isHelp && (
-             <label className="p-3 text-gray-400 bg-gray-50 rounded-full cursor-pointer hover:bg-gray-100 transition-colors">
-                <FaCamera size={20} />
-                <input type="file" className="hidden" onChange={(e) => { if(e.target.files[0]) uploadImage(e.target.files[0]).then(url => url && handleSend(url)) }} />
-             </label>
-           )}
+           <label className="p-3 text-gray-400 bg-gray-50 rounded-full cursor-pointer hover:bg-gray-100 transition-colors">
+              <FaPaperclip size={20} />
+              <input type="file" className="hidden" onChange={fileUploadHandler} />
+           </label>
            <input type="text" value={chatInput} onChange={e => setChatInput(e.target.value)} placeholder={isHelp ? "Describe your issue..." : "Type a message..."} className="flex-1 bg-gray-100 rounded-full px-5 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 transition-all"/>
-           
-           {/* FIXED: Explicitly calling sendFunc() */}
            <button onClick={() => sendFunc()} disabled={!chatInput.trim()} className="p-3 bg-brand-600 text-white rounded-full disabled:opacity-50 disabled:scale-100 active:scale-90 transition-all shadow-lg shadow-brand-200 flex items-center justify-center"><FaPaperPlane size={16}/></button>
         </div>
       </div>
